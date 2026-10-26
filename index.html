@@ -8,6 +8,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600&family=Cormorant+Garamond:wght@500;600&display=swap" rel="stylesheet">
 <style>
 @property --a{syntax:'<angle>';initial-value:0deg;inherits:false}
@@ -59,6 +62,24 @@ body[data-sp=off] .card::before{display:none}body[data-bm=off] .beam{display:non
 const {useState,useEffect,useRef,useMemo}=React;
 const KEY='aurora-biolink-v1';
 const AKEY='aurora-auth-v1',SKEY='aurora-session';
+
+// --- ตั้งค่า Firebase และ Firestore ---
+const firebaseConfig = {
+  apiKey: "AIzaSyC3fPzrFDSXhWcSmwemKXcmqt3s9EsuS2Q",
+  authDomain: "my-biolink-162e4.firebaseapp.com",
+  projectId: "my-biolink-162e4",
+  storageBucket: "my-biolink-162e4.firebasestorage.app",
+  messagingSenderId: "240285088635",
+  appId: "1:240285088635:web:5206e782b1ce46104a9bde",
+  measurementId: "G-X9E66PGVXT"
+};
+
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const db = firebase.firestore();
+const docRef = db.collection("biolink").doc("config");
+
 const getAcc=()=>{try{return JSON.parse(localStorage.getItem(AKEY))}catch(e){return null}};
 const sess=()=>{try{return sessionStorage.getItem(SKEY)}catch(e){return null}};
 const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b)));
@@ -331,12 +352,49 @@ function App(){
   useEffect(()=>{try{localStorage.setItem('aurora-lang',lang)}catch(e){}document.documentElement.lang=lang;return i18n(lang)},[lang]);
   const share=async()=>{const u=location.href.split('#')[0];try{await navigator.clipboard.writeText(u);setToast(tr('คัดลอกลิงก์แล้ว','Link copied'))}catch(e){setToast(tr('คัดลอกไม่สำเร็จ','Copy failed'))}setTimeout(()=>setToast(''),1800)};
   const secret=()=>{const now=Date.now(),k=taps.current;k.n=now-k.t<2000?k.n+1:1;k.t=now;if(k.n>=5){k.n=0;admin?setAdmin(false):sess()?setAdmin(true):setPin(true)}};
-  useEffect(()=>{try{localStorage.setItem(KEY,JSON.stringify(d))}catch(e){}},[d]);
+
+  // --- Realtime Sync กับ Firebase Firestore ---
+  const isUpdatingFromRemote = useRef(false);
+
+  useEffect(() => {
+    const unsub = docRef.onSnapshot((snapshot) => {
+      if (snapshot.exists) {
+        const data = snapshot.data();
+        isUpdatingFromRemote.current = true;
+        set(s => ({
+          ...s,
+          ...data,
+          ui: { ...UI, ...(data.ui || {}) }
+        }));
+        try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {}
+      } else {
+        // หาก Database ยังว่างเปล่า ให้สร้างข้อมูลตั้งต้น
+        const initData = load();
+        docRef.set(initData).catch(console.error);
+      }
+    }, (err) => console.error("Firebase listen error:", err));
+    return () => unsub();
+  }, []);
+
+  // บันทึกขึ้น Firebase เมื่อมีการเปลี่ยนแปลงข้อมูลจากฝั่ง Admin
+  const isFirstRun = useRef(true);
+  useEffect(() => {
+    if (isFirstRun.current) {
+      isFirstRun.current = false;
+      return;
+    }
+    if (isUpdatingFromRemote.current) {
+      isUpdatingFromRemote.current = false;
+      return;
+    }
+    docRef.set(d).catch(err => console.error("Firebase save error:", err));
+    try { localStorage.setItem(KEY, JSON.stringify(d)); } catch (e) {}
+  }, [d]);
+
   useEffect(()=>{document.documentElement.style.setProperty('--ac',d.profile.accent)},[d.profile.accent]);
   useEffect(()=>{const b=document.body,u=d.ui;b.dataset.cs=u.cs;b.dataset.ft=u.ft;b.dataset.sp=u.sp?'on':'off';b.dataset.bm=u.bm?'on':'off';b.style.setProperty('--r',u.r+'px')},[d.ui]);
   useEffect(()=>{document.title=d.profile.name+' — Bio-Link'},[d.profile.name]);
   useEffect(()=>{document.body.classList.toggle('adm',admin)},[admin]);
-  useEffect(()=>{const f=e=>{if(e.key===KEY&&e.newValue){try{set(JSON.parse(e.newValue))}catch(x){}}};window.addEventListener('storage',f);return()=>window.removeEventListener('storage',f)},[]);
   useEffect(()=>{set(s=>({...s,daily:{...s.daily,[today()]:(s.daily[today()]||0)+1}}))},[]);
   const click=l=>set(s=>({...s,links:s.links.map(x=>x.id===l.id?{...x,clicks:x.clicks+1}:x),log:[{t:Date.now(),m:'คลิก '+l.title},...s.log].slice(0,20)}));
   const toggleSnd=()=>{
